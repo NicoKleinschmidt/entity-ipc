@@ -13,13 +13,13 @@ type HandlerFunc func(v interface{}) (interface{}, error)
 
 type IPC struct {
 	conn       net.Conn
-	messageMap map[uint32]chan interface{}
+	messageMap map[uint32]chan []byte
 	handler    HandlerFunc
 	targetType interface{}
 }
 
 func (ipc *IPC) Start(conn net.Conn) error {
-	ipc.messageMap = make(map[uint32]chan interface{})
+	ipc.messageMap = make(map[uint32]chan []byte)
 	ipc.conn = conn
 
 	if ipc.handler == nil {
@@ -43,15 +43,16 @@ func (ipc *IPC) Start(conn net.Conn) error {
 			continue
 		}
 		id := binary.BigEndian.Uint32(msg[:4])
-		targetType := ipc.targetType
-
-		if ipc.targetType != nil {
-			json.Unmarshal(msg[4:], &targetType)
-		}
 
 		if c, ok := ipc.messageMap[id]; ok {
-			c <- targetType
+			c <- msg[4:]
 		} else {
+			targetType := ipc.targetType
+
+			if ipc.targetType != nil {
+				json.Unmarshal(msg[4:], &targetType)
+			}
+
 			var data []byte
 			binary.BigEndian.PutUint32(data, id)
 			res, err := ipc.handler(targetType)
@@ -73,27 +74,28 @@ func (ipc *IPC) Handle(targetType interface{}, fn HandlerFunc) {
 	ipc.targetType = targetType
 }
 
-func (ipc *IPC) Send(v interface{}) (interface{}, error) {
+func (ipc *IPC) Send(v interface{}, response interface{}) error {
 	id := rand.Uint32()
-	c := make(chan interface{})
+	c := make(chan []byte)
 	var data []byte
 
 	binary.BigEndian.PutUint32(data, id)
 	jsonData, err := json.Marshal(v)
 
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	data = append(data, jsonData...)
 	data = append(data, '\000')
 	if _, err := ipc.conn.Write(data); err != nil {
-		return nil, err
+		return err
 	}
 
 	ipc.messageMap[id] = c
+	resJson := <-c
 
-	return <-c, nil
+	return json.Unmarshal(resJson, response)
 }
 
 func errorToJson(err error) []byte {
