@@ -53,7 +53,7 @@ func (ipc *IPC) Start(conn net.Conn) error {
 				json.Unmarshal(msg[4:], &targetType)
 			}
 
-			var data []byte
+			data := make([]byte, 4)
 			binary.BigEndian.PutUint32(data, id)
 			res, err := ipc.handler(targetType)
 
@@ -77,7 +77,7 @@ func (ipc *IPC) Handle(targetType interface{}, fn HandlerFunc) {
 func (ipc *IPC) Send(v interface{}, response interface{}) error {
 	id := rand.Uint32()
 	c := make(chan []byte)
-	var data []byte
+	data := make([]byte, 4)
 
 	binary.BigEndian.PutUint32(data, id)
 	jsonData, err := json.Marshal(v)
