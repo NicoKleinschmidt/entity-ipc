@@ -2,127 +2,107 @@ package entityipc
 
 import (
 	"bufio"
+	"encoding/binary"
 	"encoding/json"
+	"fmt"
+	"math/rand"
 	"net"
-	"time"
 )
 
-type JsonIpcConn interface {
-	net.Conn
+type HandlerFunc func(v interface{}) (interface{}, error)
 
-	WriteObject(v interface{}) (int, error)
-	ReadObject(v interface{}) (int, error)
+type IPC struct {
+	conn       net.Conn
+	messageMap map[uint32]chan interface{}
+	handler    HandlerFunc
+	targetType interface{}
 }
 
-type jsonIpcConn struct {
-	conn net.Conn
+func (ipc *IPC) Start(conn net.Conn) error {
+	ipc.messageMap = make(map[uint32]chan interface{})
+	ipc.conn = conn
+
+	if ipc.handler == nil {
+		ipc.handler = func(v interface{}) (interface{}, error) {
+			return nil, fmt.Errorf("no handler registered")
+		}
+	}
+
+	r := bufio.NewReader(conn)
+
+	for {
+		msg, err := r.ReadBytes('\000')
+
+		if err != nil {
+			return err
+		}
+
+		msg = msg[:1]
+
+		if len(msg) < 4 {
+			continue
+		}
+		id := binary.BigEndian.Uint32(msg[:4])
+		targetType := ipc.targetType
+
+		if ipc.targetType != nil {
+			json.Unmarshal(msg[4:], &targetType)
+		}
+
+		if c, ok := ipc.messageMap[id]; ok {
+			c <- targetType
+		} else {
+			var data []byte
+			binary.BigEndian.PutUint32(data, id)
+			res, err := ipc.handler(targetType)
+
+			if err != nil {
+				data = append(data, errorToJson(err)...)
+			} else {
+				jsonData, _ := json.Marshal(res)
+				data = append(data, jsonData...)
+			}
+
+			ipc.conn.Write(append(data, '\000'))
+		}
+	}
 }
 
-func Dial(address string) (JsonIpcConn, error) {
-	conn, err := net.Dial("unix", address)
+func (ipc *IPC) Handle(targetType interface{}, fn HandlerFunc) {
+	ipc.handler = fn
+	ipc.targetType = targetType
+}
+
+func (ipc *IPC) Send(v interface{}) (interface{}, error) {
+	id := rand.Uint32()
+	c := make(chan interface{})
+	var data []byte
+
+	binary.BigEndian.PutUint32(data, id)
+	jsonData, err := json.Marshal(v)
 
 	if err != nil {
 		return nil, err
 	}
 
-	return jsonIpcConn{conn}, nil
-}
-
-func (c jsonIpcConn) ReadObject(v interface{}) (int, error) {
-	r := bufio.NewReader(c.conn)
-	data, err := r.ReadBytes('\000')
-
-	if err != nil {
-		return len(data), err
-	}
-
-	err = json.Unmarshal(data[:len(data)-1], v)
-
-	return len(data), err
-}
-
-func (c jsonIpcConn) WriteObject(v interface{}) (int, error) {
-	data, err := json.Marshal(v)
-
-	if err != nil {
-		return 0, err
-	}
-
-	return c.conn.Write(append(data, '\000'))
-}
-
-func (c jsonIpcConn) Read(b []byte) (int, error) {
-	return c.conn.Read(b)
-}
-
-func (c jsonIpcConn) Write(b []byte) (int, error) {
-	return c.conn.Write(b)
-}
-
-func (c jsonIpcConn) Close() error {
-	return c.conn.Close()
-}
-
-func (c jsonIpcConn) LocalAddr() net.Addr {
-	return c.conn.LocalAddr()
-}
-
-func (c jsonIpcConn) RemoteAddr() net.Addr {
-	return c.conn.RemoteAddr()
-}
-
-func (c jsonIpcConn) SetDeadline(t time.Time) error {
-	return c.conn.SetDeadline(t)
-}
-
-func (c jsonIpcConn) SetReadDeadline(t time.Time) error {
-	return c.conn.SetReadDeadline(t)
-}
-
-func (c jsonIpcConn) SetWriteDeadline(t time.Time) error {
-	return c.conn.SetWriteDeadline(t)
-}
-
-type JsonIpcListener interface {
-	net.Listener
-
-	AcceptJson() (JsonIpcConn, error)
-}
-
-type jsonIpcListener struct {
-	ls net.Listener
-}
-
-func Listen(address string) (JsonIpcListener, error) {
-	ls, err := net.Listen("unix", address)
-
-	if err != nil {
+	data = append(data, jsonData...)
+	data = append(data, '\000')
+	if _, err := ipc.conn.Write(data); err != nil {
 		return nil, err
 	}
 
-	return jsonIpcListener{ls}, nil
+	ipc.messageMap[id] = c
+
+	return <-c, nil
 }
 
-func (ipcLs jsonIpcListener) AcceptJson() (JsonIpcConn, error) {
-	conn, err := ipcLs.ls.Accept()
+func errorToJson(err error) []byte {
+	errStruct := struct {
+		Error   error
+		Message string
+	}{err, err.Error()}
 
-	if err != nil {
-		return nil, err
-	}
+	b, _ := json.Marshal(errStruct)
 
-	return jsonIpcConn{
-		conn: conn,
-	}, nil
-}
-
-func (ipcLs jsonIpcListener) Accept() (net.Conn, error) {
-	return ipcLs.AcceptJson()
-}
-
-func (ipcLs jsonIpcListener) Close() error {
-	return ipcLs.ls.Close()
-}
-
-func (ipcLs jsonIpcListener) Addr() net.Addr {
-	return ipcLs.ls.Addr()
+	return b
 }
