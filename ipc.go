@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math/rand"
 	"net"
+	"reflect"
 )
 
 type HandlerFunc func(v interface{}) (interface{}, error)
@@ -47,15 +48,16 @@ func (ipc *IPC) Start(conn net.Conn) error {
 		if c, ok := ipc.messageMap[id]; ok {
 			c <- msg[4:]
 		} else {
-			targetType := ipc.targetType
-
-			if ipc.targetType != nil {
-				json.Unmarshal(msg[4:], &targetType)
+			if ipc.targetType == nil {
+				ipc.targetType = make(map[string]interface{})
 			}
+
+			targetType := reflect.New(reflect.TypeOf(ipc.targetType)).Elem()
+			json.Unmarshal(msg[4:], targetType.Addr().Interface())
 
 			data := make([]byte, 4)
 			binary.BigEndian.PutUint32(data, id)
-			res, err := ipc.handler(targetType)
+			res, err := ipc.handler(targetType.Interface())
 
 			if err != nil {
 				data = append(data, errorToJson(err)...)
