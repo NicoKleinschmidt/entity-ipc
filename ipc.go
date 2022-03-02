@@ -37,7 +37,7 @@ func (ipc *IPC) Start(conn net.Conn) error {
 			return err
 		}
 
-		msg = msg[:1]
+		msg = msg[:len(msg)-1]
 
 		if len(msg) < 4 {
 			continue
