@@ -50,7 +50,7 @@ func (ipc *IPC) Start(conn net.Conn) error {
 
 		ipc.mutex.RLock()
 		c, ok := ipc.messageMap[id]
-		ipc.mutex.RLocker()
+		ipc.mutex.RUnlock()
 
 		if ok {
 			c <- msg[4:]
