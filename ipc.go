@@ -8,6 +8,7 @@ import (
 	"math/rand"
 	"net"
 	"reflect"
+	"sync"
 )
 
 type HandlerFunc func(v interface{}) (interface{}, error)
@@ -17,11 +18,13 @@ type IPC struct {
 	messageMap map[uint32]chan []byte
 	handler    HandlerFunc
 	targetType interface{}
+	mutex      *sync.RWMutex
 }
 
 func (ipc *IPC) Start(conn net.Conn) error {
 	ipc.messageMap = make(map[uint32]chan []byte)
 	ipc.conn = conn
+	ipc.mutex = &sync.RWMutex{}
 
 	if ipc.handler == nil {
 		ipc.handler = func(v interface{}) (interface{}, error) {
@@ -45,7 +48,11 @@ func (ipc *IPC) Start(conn net.Conn) error {
 		}
 		id := binary.BigEndian.Uint32(msg[:4])
 
-		if c, ok := ipc.messageMap[id]; ok {
+		ipc.mutex.RLock()
+		c, ok := ipc.messageMap[id]
+		ipc.mutex.RLocker()
+
+		if ok {
 			c <- msg[4:]
 		} else {
 			if ipc.targetType == nil {
@@ -94,7 +101,9 @@ func (ipc *IPC) Send(v interface{}, response interface{}) error {
 		return err
 	}
 
+	ipc.mutex.Lock()
 	ipc.messageMap[id] = c
+	ipc.mutex.Unlock()
 	resJson := <-c
 
 	return json.Unmarshal(resJson, response)
