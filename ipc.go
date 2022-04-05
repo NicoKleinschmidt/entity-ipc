@@ -5,8 +5,8 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math/rand"
-	"net"
 	"reflect"
 	"sync"
 )
@@ -14,16 +14,16 @@ import (
 type HandlerFunc func(v interface{}) (interface{}, error)
 
 type IPC struct {
-	conn       net.Conn
+	rw         io.ReadWriter
 	messageMap map[uint32]chan []byte
 	handler    HandlerFunc
 	targetType interface{}
 	mutex      *sync.RWMutex
 }
 
-func (ipc *IPC) Start(conn net.Conn) error {
+func (ipc *IPC) Start(rw io.ReadWriter) error {
 	ipc.messageMap = make(map[uint32]chan []byte)
-	ipc.conn = conn
+	ipc.rw = rw
 	ipc.mutex = &sync.RWMutex{}
 
 	if ipc.handler == nil {
@@ -32,7 +32,7 @@ func (ipc *IPC) Start(conn net.Conn) error {
 		}
 	}
 
-	r := bufio.NewReader(conn)
+	r := bufio.NewReader(rw)
 
 	for {
 		msg, err := r.ReadBytes('\000')
@@ -73,7 +73,7 @@ func (ipc *IPC) Start(conn net.Conn) error {
 				data = append(data, jsonData...)
 			}
 
-			ipc.conn.Write(append(data, '\000'))
+			ipc.rw.Write(append(data, '\000'))
 		}
 	}
 }
@@ -97,7 +97,7 @@ func (ipc *IPC) Send(v interface{}, response interface{}) error {
 
 	data = append(data, jsonData...)
 	data = append(data, '\000')
-	if _, err := ipc.conn.Write(data); err != nil {
+	if _, err := ipc.rw.Write(data); err != nil {
 		return err
 	}
 
