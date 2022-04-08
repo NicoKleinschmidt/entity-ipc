@@ -106,7 +106,10 @@ func (ipc *IPC) Send(v interface{}, response interface{}) error {
 	ipc.mutex.Unlock()
 	resJson := <-c
 
+	ipc.mutex.Lock()
 	delete(ipc.messageMap, id)
+	ipc.mutex.Unlock()
+
 	return json.Unmarshal(resJson, response)
 }
 
