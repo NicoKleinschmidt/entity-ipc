@@ -2,7 +2,6 @@ package entityipc
 
 import (
 	"bufio"
-	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -21,6 +20,11 @@ type IPC struct {
 	mutex      *sync.RWMutex
 }
 
+type message struct {
+	Id   uint32 `json:"id"`
+	Data []byte `json:"data"`
+}
+
 func (ipc *IPC) Start(rw io.ReadWriter) error {
 	ipc.messageMap = make(map[uint32]chan []byte)
 	ipc.rw = rw
@@ -35,44 +39,46 @@ func (ipc *IPC) Start(rw io.ReadWriter) error {
 	r := bufio.NewReader(rw)
 
 	for {
-		msg, err := r.ReadBytes('\000')
+		msgTxt, err := r.ReadBytes('\000')
 
 		if err != nil {
 			return err
 		}
 
-		msg = msg[:len(msg)-1]
+		// Remove null char
+		msgTxt = msgTxt[:len(msgTxt)-1]
 
-		if len(msg) < 4 {
-			continue
+		var msg message
+		if err := json.Unmarshal(msgTxt, &msg); err != nil {
+			return err
 		}
-		id := binary.BigEndian.Uint32(msg[:4])
 
 		ipc.mutex.RLock()
-		c, ok := ipc.messageMap[id]
+		c, ok := ipc.messageMap[msg.Id]
 		ipc.mutex.RUnlock()
 
 		if ok {
-			c <- msg[4:]
+			c <- msg.Data
 		} else {
 			if ipc.targetType == nil {
 				ipc.targetType = make(map[string]interface{})
 			}
 
 			targetType := reflect.New(reflect.TypeOf(ipc.targetType)).Elem()
-			json.Unmarshal(msg[4:], targetType.Addr().Interface())
+			json.Unmarshal(msg.Data, targetType.Addr().Interface())
 
-			data := make([]byte, 4)
-			binary.BigEndian.PutUint32(data, id)
+			responseMsg := message{
+				Id: msg.Id,
+			}
 			res, err := ipc.handler(targetType.Interface())
 
 			if err != nil {
-				data = append(data, errorToJson(err)...)
+				responseMsg.Data = errorToJson(err)
 			} else {
-				jsonData, _ := json.Marshal(res)
-				data = append(data, jsonData...)
+				responseMsg.Data, _ = json.Marshal(res)
 			}
 
+			data, _ := json.Marshal(responseMsg)
 			ipc.rw.Write(append(data, '\000'))
 		}
 	}
@@ -84,30 +90,30 @@ func (ipc *IPC) Handle(targetType interface{}, fn HandlerFunc) {
 }
 
 func (ipc *IPC) Send(v interface{}, response interface{}) error {
-	id := rand.Uint32()
 	c := make(chan []byte)
-	data := make([]byte, 4)
+	msg := message{
+		Id: rand.Uint32(),
+	}
 
-	binary.BigEndian.PutUint32(data, id)
 	jsonData, err := json.Marshal(v)
 
 	if err != nil {
 		return err
 	}
 
-	data = append(data, jsonData...)
-	data = append(data, '\000')
-	if _, err := ipc.rw.Write(data); err != nil {
+	msg.Data = jsonData
+	msgJson, _ := json.Marshal(msg)
+	if _, err := ipc.rw.Write(append(msgJson, '\000')); err != nil {
 		return err
 	}
 
 	ipc.mutex.Lock()
-	ipc.messageMap[id] = c
+	ipc.messageMap[msg.Id] = c
 	ipc.mutex.Unlock()
 	resJson := <-c
 
 	ipc.mutex.Lock()
-	delete(ipc.messageMap, id)
+	delete(ipc.messageMap, msg.Id)
 	ipc.mutex.Unlock()
 
 	return json.Unmarshal(resJson, response)
