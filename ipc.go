@@ -22,7 +22,7 @@ type IPC struct {
 
 type message struct {
 	Id   uint32 `json:"id"`
-	Data []byte `json:"data"`
+	Data string `json:"data"`
 }
 
 func (ipc *IPC) Start(rw io.ReadWriter) error {
@@ -58,14 +58,14 @@ func (ipc *IPC) Start(rw io.ReadWriter) error {
 		ipc.mutex.RUnlock()
 
 		if ok {
-			c <- msg.Data
+			c <- []byte(msg.Data)
 		} else {
 			if ipc.targetType == nil {
 				ipc.targetType = make(map[string]interface{})
 			}
 
 			targetType := reflect.New(reflect.TypeOf(ipc.targetType)).Elem()
-			json.Unmarshal(msg.Data, targetType.Addr().Interface())
+			json.Unmarshal([]byte(msg.Data), targetType.Addr().Interface())
 
 			responseMsg := message{
 				Id: msg.Id,
@@ -73,9 +73,10 @@ func (ipc *IPC) Start(rw io.ReadWriter) error {
 			res, err := ipc.handler(targetType.Interface())
 
 			if err != nil {
-				responseMsg.Data = errorToJson(err)
+				responseMsg.Data = string(errorToJson(err))
 			} else {
-				responseMsg.Data, _ = json.Marshal(res)
+				data, _ := json.Marshal(res)
+				responseMsg.Data = string(data)
 			}
 
 			data, _ := json.Marshal(responseMsg)
@@ -101,7 +102,7 @@ func (ipc *IPC) Send(v interface{}, response interface{}) error {
 		return err
 	}
 
-	msg.Data = jsonData
+	msg.Data = string(jsonData)
 	msgJson, _ := json.Marshal(msg)
 	if _, err := ipc.rw.Write(append(msgJson, '\000')); err != nil {
 		return err
